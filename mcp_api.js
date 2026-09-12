@@ -853,7 +853,56 @@ async function mcp_api_code_target(args, runtime) {
 	};
 }
 
-function mcp_api_comm_relay(target, code) {
+// Only fields from the authenticated live welcome packet belong in this observation.
+function mcp_api_browser_runtime_observation(character) {
+	function identifier(value) {
+		return typeof value === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(value) ? value : null;
+	}
+	function number(value) {
+		return typeof value === "number" && Number.isFinite(value) ? value : null;
+	}
+	var equipment = null;
+	if (character.slots && typeof character.slots === "object" && !Array.isArray(character.slots)) {
+		equipment = {};
+		["helmet", "chest", "pants", "shoes", "gloves", "cape", "belt", "amulet", "earring1", "earring2", "ring1", "ring2", "orb", "mainhand", "offhand"].forEach(function (slot) {
+			var item = character.slots[slot];
+			if (!item || typeof item !== "object" || Array.isArray(item) || !identifier(item.name)) return;
+			var summary = { name: item.name };
+			if (number(item.level) !== null) summary.level = item.level;
+			if (identifier(item.stat_type)) summary.stat_type = item.stat_type;
+			if (identifier(item.p)) summary.p = item.p;
+			equipment[slot] = summary;
+		});
+	}
+	return {
+		source: "authenticated_game_server_welcome",
+		observed_at: new Date().toISOString(),
+		name: identifier(character.name) || identifier(character.id),
+		class: identifier(character.ctype),
+		level: number(character.level),
+		map: identifier(character.map),
+		x: number(character.x),
+		y: number(character.y),
+		hp: number(character.hp),
+		max_hp: number(character.max_hp),
+		mp: number(character.mp),
+		max_mp: number(character.max_mp),
+		rip: typeof character.rip === "boolean" ? character.rip : typeof character.rip === "string" ? !!character.rip : null,
+		target: identifier(character.target) || number(character.target),
+		party: identifier(character.party),
+		// The welcome serializer includes the party leader, but no roster.
+		party_roster: null,
+		equipment: equipment,
+	};
+}
+
+async function mcp_api_browser_get_character_runtime(args) {
+	var target = await mcp_api_code_target(args, "browser");
+	if (target.failed) return target;
+	return await mcp_api_comm_relay(target, undefined, true);
+}
+
+function mcp_api_comm_relay(target, code, include_runtime) {
 	return new Promise(function (resolve) {
 		var socket = null;
 		var timeout = null;
@@ -905,7 +954,7 @@ function mcp_api_comm_relay(target, code) {
 				return finish({ failed: true, reason: "browser_session_unavailable", character: target.character, runtime: target.runtime });
 			welcomed = true;
 			code_running = observed.code === true;
-			if (code === undefined) return finish(public_result());
+			if (code === undefined) return finish(public_result(include_runtime === true ? { observation: mcp_api_browser_runtime_observation(observed) } : undefined));
 			socket.emit("loaded", { success: 1, width: 800, height: 600, scale: 2 });
 		});
 		socket.on("entities", function () {
@@ -2047,6 +2096,10 @@ var MCP_API_REF = {
 		F: mcp_api_delete_code,
 		slot: { type: "identifier" },
 	},
+	browser_get_character_runtime: {
+		F: mcp_api_browser_get_character_runtime,
+		character: { type: "identifier" },
+	},
 	browser_code_status: {
 		F: mcp_api_browser_code_status,
 		character: { type: "identifier" },
@@ -2137,6 +2190,10 @@ var MCP_TOOL_META = {
 	},
 	save_code: { description: "Create or replace one account-owned JavaScript CODE slot. Read an existing slot before replacement; saving does not start a character.", destructiveHint: true },
 	delete_code: { description: "Delete one owned CODE slot.", destructiveHint: true },
+	browser_get_character_runtime: {
+		description: "Read sanitized live state from an account-owned browser or Steam character through the authenticated relay. Refuses Mainframe assignments. Does not execute CODE or return saved profile snapshots. Unavailable fields are null; observed_at is relay receipt time.",
+		readOnlyHint: true,
+	},
 	browser_code_status: {
 		description: "Check whether an account-owned character is connected in an open browser and whether browser CODE is running. It refuses characters assigned to Mainframe.",
 		readOnlyHint: true,
