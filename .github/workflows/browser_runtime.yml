@@ -18,3 +18,7 @@ jobs:
         with:
           node-version: "22"
       - run: node --test node/test/browser_character_runtime.test.js
+      - name: Check test formatting
+        run: |
+          npx --yes prettier@3.9.6 --write node/test/browser_character_runtime.test.js
+          git diff --exit-code -- node/test/browser_character_runtime.test.js
